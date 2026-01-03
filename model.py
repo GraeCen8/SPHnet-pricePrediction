@@ -307,14 +307,14 @@ class SPHNet(nn.Module):
 
 
 # Example usage and model instantiation
-if __name__ == "__main__":
+def test_sphnet():
     # Model configuration (as per paper)
     config = {
         'num_features': 6,           # Open, High, Low, Close, Adj Close, Volume
         'patch_size': 8,             # Optimal from ablation study
         'embed_dim': 128,            # Patch embedding dimension
-        'vit_num_layers': 8,         # ViT layers
-        'transformer_num_layers': 8, # Transformer layers
+        'vit_num_layers': 4,         # ViT layers
+        'transformer_num_layers': 4, # Transformer layers
         'num_heads': 8,              # Number of attention heads (optimal)
         'ff_dim': 512,               # Feed-forward dimension
         'dropout': 0.1,              # Dropout rate
@@ -380,3 +380,6 @@ if __name__ == "__main__":
     print(output)
 
     print("=" * 80)
+
+if __name__ == "__main__":
+    test_sphnet()
