@@ -109,7 +109,9 @@ def process(file_path = 'data/stock_data.csv',
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, val_loader, test_loader, scaler
+    feature_columns = train_df.drop(columns=[date_column]).columns.tolist()
+
+    return train_loader, val_loader, test_loader, scaler, feature_columns
 
 
 if __name__ == "__main__":
@@ -122,4 +124,4 @@ if __name__ == "__main__":
     "val_size": 0.2,
     "test_size": 0.1,
     }
-    trainLoader, valLoader, testLoader, scaler = process(**dataPARAMS)
+    trainLoader, valLoader, testLoader, scaler, feature_columns = process(**dataPARAMS)
