@@ -15,42 +15,65 @@ def Train(model, optimizer,
     
         #set up accelerator
     acc = accelerator.Accelerator()
-    model, optimizer, trainLoader, valLoader, testLoader = accelerator.prepare(
+    model, optimizer, trainLoader, valLoader, testLoader = acc.prepare(
         model, optimizer, trainLoader, valLoader, testLoader
     )
 
     #main loop
-    for epoch in range(1,epochs):
+    for epoch in range(1, epochs + 1):
 
+        pbar = tqdm.tqdm(trainLoader, desc=f"TrainingEpoch {epoch} /{epochs}", unit="batch")
 
-        pbar = tqdm.tqdm(trainLoader, desc=f"TrainingEpoch 1 /{epochs}", unit="batch")
-
-        #training section
+        # training section
         model.train()
+        train_losses = []
         for batch in trainLoader:
-            outputs = model(**batch)
-            loss = criterion(outputs.logits, batch['labels'])
+            # dataloader yields (inputs, targets)
+            inputs, targets = batch
+
+            # Ensure targets have same shape as model output (B, 1)
+            if targets.dim() == 1:
+                targets = targets.unsqueeze(-1)
+
+            # zero gradients (try set_to_none for efficiency, fallback if not supported)
+            try:
+                optimizer.zero_grad(set_to_none=True)
+            except TypeError:
+                try:
+                    optimizer.zero_grad()
+                except Exception:
+                    pass
+
+            outputs = model(inputs)
+
+            loss = criterion(outputs, targets)
             acc.backward(loss)
+
             optimizer.step()
-            optimizer.zero_grad()
             if scheduler:
                 scheduler.step()
+
+            train_losses.append(loss.item())
             pbar.update(1)
-        pbar.set_description(f"in Epoch {epoch} /{epochs} | Train Loss: {loss.item():.4f}")
+
+        avg_train_loss = np.mean(train_losses) if train_losses else 0.0
+        pbar.set_description(f"Epoch {epoch} /{epochs} | Train Loss: {avg_train_loss:.4f}")
         pbar.refresh()
 
-        #validation section
+        # validation section
         if epoch % valGAP == 0:
             model.eval()
             val_losses = []
             with torch.no_grad():
                 for batch in valLoader:
-                    outputs = model(**batch)
-                    loss = outputs.loss
+                    inputs, targets = batch
+                    if targets.dim() == 1:
+                        targets = targets.unsqueeze(-1)
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets)
                     val_losses.append(loss.item())
-            avg_val_loss = np.mean(val_losses)
-            print(f"Epoch {epoch}, Validation Loss: {avg_val_loss}")
-            print(f"finished Epoch {epoch} /{epochs} | Val Loss: {avg_val_loss:.4f}")
+            avg_val_loss = np.mean(val_losses) if val_losses else 0.0
+            print(f"Epoch {epoch}, Validation Loss: {avg_val_loss:.6f}")
             pbar.refresh()
         pbar.close()
     
@@ -59,8 +82,18 @@ def Train(model, optimizer,
     test_losses = []
     with torch.no_grad():
         for batch in testLoader:
-            outputs = model(**batch)
-            loss = outputs.loss
+            inputs, targets = batch
+            if targets.dim() == 1:
+                targets = targets.unsqueeze(-1)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
             test_losses.append(loss.item())
     avg_test_loss = np.mean(test_losses)
     print(f"Testing Loss: {avg_test_loss}")
+    # return the unwrapped model so callers can save or inspect it
+    try:
+        final_model = acc.unwrap_model(model)
+    except Exception:
+        final_model = model
+
+    return final_model
