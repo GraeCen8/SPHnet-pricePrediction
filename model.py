@@ -312,12 +312,12 @@ def test_sphnet():
     config = {
         'num_features': 6,           # Open, High, Low, Close, Adj Close, Volume
         'patch_size': 8,             # Optimal from ablation study
-        'embed_dim': 128,            # Patch embedding dimension
-        'vit_num_layers': 4,         # ViT layers
-        'transformer_num_layers': 4, # Transformer layers
+        'embed_dim': 256,            # Patch embedding dimension
+        'vit_num_layers': 8,         # ViT layers
+        'transformer_num_layers': 8, # Transformer layers
         'num_heads': 8,              # Number of attention heads (optimal)
         'ff_dim': 512,               # Feed-forward dimension
-        'dropout': 0.1,              # Dropout rate
+        'dropout': 0.2,              # Dropout rate
         'output_dim': 1              # Single price prediction per sample
     }
     
