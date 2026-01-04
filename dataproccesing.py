@@ -23,13 +23,13 @@ def split_data(df, test_size=0.1, val_size=0.2, date_column='Date'):
 
 def FeatureEngineering(df):
     # Example feature engineering using TA-Lib
-    df['SMA_10'] = ta.SMA(df['Close'], timeperiod=200)
-    df['EMA_10'] = ta.EMA(df['Close'], timeperiod=10)
-    df['RSI_14'] = ta.RSI(df['Close'], timeperiod=14)
-    df['MACD'], df['MACD_signal'], df['MACD_hist'] = ta.MACD(df['Close'], fastperiod=12, slowperiod=26, signalperiod=9)
-    df['ATR_14'] = ta.ATR(df['High'], df['Low'], df['Close'], timeperiod=14)
-    df['range'] = df['High'] - df['Low']
-    df['vol_moving_avg_10'] = df['Volume'].rolling(window=10).mean()
+    df['SMA_10'] = ta.SMA(df['close'], timeperiod=200)
+    df['EMA_10'] = ta.EMA(df['close'], timeperiod=10)
+    df['RSI_14'] = ta.RSI(df['close'], timeperiod=14)
+    df['MACD'], df['MACD_signal'], df['MACD_hist'] = ta.MACD(df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
+    df['ATR_14'] = ta.ATR(df['high'], df['low'], df['close'], timeperiod=14)
+    df['range'] = df['high'] - df['low']
+    df['vol_moving_avg_10'] = df['volume'].rolling(window=10).mean()
     df = df.dropna()
     return df
 
@@ -64,8 +64,9 @@ def sliding_window(data, window_size, target_column): #using np funcs for speed
 
 class TimeSeriesDataset(Dataset):
     def __init__(self, X, y):
-        self.X = torch.tensor(X, dtype=torch.float16)
-        self.y = torch.tensor(y, dtype=torch.float16)
+        # use float32 to match model parameter dtype and avoid mixed-precision issues
+        self.X = torch.tensor(X, dtype=torch.float32)
+        self.y = torch.tensor(y, dtype=torch.float32)
 
     def __len__(self):
         return len(self.X)
@@ -73,17 +74,21 @@ class TimeSeriesDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
     
-def process(file_path = 'data/stock_data.csv',  # full data processing pipeline
-            date_column = 'Date',
-            target_column = 'Close',
-            window_size = 64,
-            batch_size = 128,
-            ): 
-    
+def process(file_path = 'data/stock_data.csv',  
+        date_column = 'timestamp',
+        target_column = 'close',
+        window_size = 64,
+        batch_size = 128,
+        val_size = 0.2,
+        test_size = 0.1
+    ): 
+
+
+
     df = load_data(file_path, date_column)
     df = FeatureEngineering(df)
 
-    train_df, val_df, test_df = split_data(df, date_column=date_column)
+    train_df, val_df, test_df = split_data(df,val_size=val_size, test_size=test_size, date_column=date_column)
 
     train_scaled, val_scaled, scaler = normalize_data(train_df.drop(columns=[date_column]), val_df.drop(columns=[date_column]), method='minmax')
     test_scaled, _, _ = normalize_data(train_df.drop(columns=[date_column]), test_df.drop(columns=[date_column]), method='minmax')
@@ -100,8 +105,21 @@ def process(file_path = 'data/stock_data.csv',  # full data processing pipeline
     val_dataset = TimeSeriesDataset(X_val, y_val)
     test_dataset = TimeSeriesDataset(X_test, y_test)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader, scaler
+
+
+if __name__ == "__main__":
+    dataPARAMS = {
+    "file_path": "data/btc15m.csv",
+    "date_column": "timestamp",
+    "target_column": "close",
+    "window_size": 64,
+    "batch_size": 128,
+    "val_size": 0.2,
+    "test_size": 0.1,
+    }
+    trainLoader, valLoader, testLoader, scaler = process(**dataPARAMS)
