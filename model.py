@@ -312,12 +312,12 @@ def test_sphnet():
     config = {
         'num_features': 6,           # Open, High, Low, Close, Adj Close, Volume
         'patch_size': 8,             # Optimal from ablation study
-        'embed_dim': 256,            # Patch embedding dimension
-        'vit_num_layers': 8,         # ViT layers
-        'transformer_num_layers': 8, # Transformer layers
-        'num_heads': 8,              # Number of attention heads (optimal)
-        'ff_dim': 512,               # Feed-forward dimension
-        'dropout': 0.2,              # Dropout rate
+        'embed_dim': 64,            # Patch embedding dimension
+        'vit_num_layers': 1,         # ViT layers
+        'transformer_num_layers': 1, # Transformer layers
+        'num_heads': 2,              # Number of attention heads (optimal)
+        'ff_dim': 128,               # Feed-forward dimension
+        'dropout': 0.1,              # Dropout rate
         'output_dim': 1              # Single price prediction per sample
     }
     
@@ -341,7 +341,7 @@ def test_sphnet():
     print(f"Trainable parameters: {trainable_params:,}")
     
     # Example forward pass
-    batch_size = 32
+    batch_size = 256
     seq_len = 64  # Sequence length (must be divisible by patch_size=8)
     
     # Create dummy input
