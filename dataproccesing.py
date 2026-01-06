@@ -4,7 +4,6 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import MinMaxScaler
-import talib as ta 
 import numpy as np
 
 
@@ -21,19 +20,77 @@ def split_data(df, test_size=0.1, val_size=0.2, date_column='Date'):
     test_df = df.iloc[split_index:]
     return train_df, val_df, test_df
 
-def FeatureEngineering(df):
-    # Example feature engineering using TA-Lib
-    df['SMA_10'] = ta.SMA(df['close'], timeperiod=200)
-    df['EMA_10'] = ta.EMA(df['close'], timeperiod=10)
-    df['RSI_14'] = ta.RSI(df['close'], timeperiod=14)
-    df['MACD'], df['MACD_signal'], df['MACD_hist'] = ta.MACD(df['close'], fastperiod=12, slowperiod=26, signalperiod=9)
-    df['ATR_14'] = ta.ATR(df['high'], df['low'], df['close'], timeperiod=14)
+
+def FeatureEngineering(df, ema_n=20):
+    df = df.copy()
+
+    eps = 1e-8  # numerical safety
+
+    # --------------------------------------------------
+    # 1. Core price dynamics (NO multi-lag returns)
+    # --------------------------------------------------
+    df['logRet'] = np.log(df['close'] / df['close'].shift(1))
+    df['absLogRet'] = df['logRet'].abs()
+
+    # Velocity (return acceleration)
+    df['velocity'] = df['logRet'] - df['logRet'].shift(1)
+
+    # --------------------------------------------------
+    # 2. Range & volatility (window-light)
+    # --------------------------------------------------
     df['range'] = df['high'] - df['low']
-    df['vol_moving_avg_10'] = df['volume'].rolling(window=10).mean()
-    df = df.dropna()
+    df['logRange'] = np.log(df['range'] + eps)
+
+    # Signed range
+    df['signedLogRange'] = np.sign(df['logRet']) * df['logRange']
+
+    # True Range
+    prev_close = df['close'].shift(1)
+    df['trueRange'] = np.maximum(
+        df['high'] - df['low'],
+        np.maximum(
+            (df['high'] - prev_close).abs(),
+            (df['low'] - prev_close).abs()
+        )
+    )
+
+    # EMA-normalized TR (volatility surprise)
+    df['emaTR'] = df['trueRange'].ewm(span=ema_n, adjust=False).mean()
+    df['trRatio'] = df['trueRange'] / (df['emaTR'] + eps)
+
+    # --------------------------------------------------
+    # 3. Volatility regime (transformer friendly)
+    # --------------------------------------------------
+    df['emaAbsRet'] = df['absLogRet'].ewm(span=ema_n, adjust=False).mean()
+
+    df['volShock'] = df['absLogRet'] - df['emaAbsRet']
+    df['volPersist'] = (df['absLogRet'] > df['emaAbsRet']).astype(int)
+
+    # --------------------------------------------------
+    # 4. Mean-reversion state (NOT a signal)
+    # --------------------------------------------------
+    df['emaClose'] = df['close'].ewm(span=ema_n, adjust=False).mean()
+    df['emaDist'] = (df['close'] - df['emaClose']) / (df['emaAbsRet'] + eps)
+
+    # Return reversal proxy
+    df['reversal'] = -np.sign(df['logRet'].shift(1)) * df['logRet']
+
+    # --------------------------------------------------
+    # 5. Volume (optional but useful if available)
+    # --------------------------------------------------
+    if 'volume' in df.columns:
+        df['emaVol'] = df['volume'].ewm(span=ema_n, adjust=False).mean()
+        df['volSurprise'] = np.log((df['volume'] + eps) / (df['emaVol'] + eps))
+        df['volPriceInteraction'] = df['logRet'] * df['volSurprise']
+
+    # --------------------------------------------------
+    # 6. Cleanup
+    # --------------------------------------------------
+    df = df.replace([np.inf, -np.inf], np.nan)
+
     return df
 
-def normalize_data(train_data, test_data, method='minmax'):
+def normalize_data(train_data, val_data, test_data, method='minmax'):
     if method == 'standard':
         scaler = StandardScaler()
     elif method == 'minmax':
@@ -43,6 +100,7 @@ def normalize_data(train_data, test_data, method='minmax'):
 
     scaler.fit(train_data)
     train_scaled = scaler.transform(train_data)
+    val_scaled = scaler.transform(val_data)
     test_scaled = scaler.transform(test_data)
 
     return train_scaled, test_scaled, scaler
@@ -74,52 +132,149 @@ class TimeSeriesDataset(Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
     
-def process(file_path = 'data/stock_data.csv',  
-        date_column = 'timestamp',
-        target_column = 'close',
-        window_size = 64,
-        batch_size = 128,
-        val_size = 0.2,
-        test_size = 0.1
-    ): 
-
-
-
+    
+def process(
+    file_path,
+    date_column='timestamp',
+    target_column='close',
+    window_size=64,
+    batch_size=128,
+    val_size=0.2,
+    test_size=0.1,
+    scaler_method='standard',
+    ema_n=20
+):
+    # --------------------------------------------------
+    # 1. Load & sort raw data
+    # --------------------------------------------------
     df = load_data(file_path, date_column)
-    df = FeatureEngineering(df)
 
-    train_df, val_df, test_df = split_data(df,val_size=val_size, test_size=test_size, date_column=date_column)
+    # --------------------------------------------------
+    # 2. Temporal split on RAW data (NO FEATURES YET)
+    # --------------------------------------------------
+    train_df, val_df, test_df = split_data(
+        df,
+        val_size=val_size,
+        test_size=test_size,
+        date_column=date_column
+    )
 
-    train_scaled, val_scaled, scaler = normalize_data(train_df.drop(columns=[date_column]), val_df.drop(columns=[date_column]), method='minmax')
-    test_scaled, _, _ = normalize_data(train_df.drop(columns=[date_column]), test_df.drop(columns=[date_column]), method='minmax')
+    # --------------------------------------------------
+    # 3. Feature engineering (per split, no leakage)
+    # --------------------------------------------------
+    train_df = FeatureEngineering(train_df, ema_n=ema_n)
+    val_df   = FeatureEngineering(val_df,   ema_n=ema_n)
+    test_df  = FeatureEngineering(test_df,  ema_n=ema_n)
 
-    train_scaled_df = pd.DataFrame(train_scaled, columns=train_df.drop(columns=[date_column]).columns)
-    val_scaled_df = pd.DataFrame(val_scaled, columns=val_df.drop(columns=[date_column]).columns)
-    test_scaled_df = pd.DataFrame(test_scaled, columns=test_df.drop(columns=[date_column]).columns)
+    # Drop rows with incomplete EMA state
+    train_df = train_df.dropna().reset_index(drop=True)
+    val_df   = val_df.dropna().reset_index(drop=True)
+    test_df  = test_df.dropna().reset_index(drop=True)
 
-    X_train, y_train = sliding_window(train_scaled_df, window_size, target_column)
-    X_val, y_val = sliding_window(val_scaled_df, window_size, target_column)
-    X_test, y_test = sliding_window(test_scaled_df, window_size, target_column)
+    # --------------------------------------------------
+    # 4. Define target (NEXT-step return)
+    # --------------------------------------------------
+    for df_ in [train_df, val_df, test_df]:
+        df_['target'] = df_['logRet'].shift(-1)
 
+    train_df = train_df.dropna()
+    val_df   = val_df.dropna()
+    test_df  = test_df.dropna()
+
+    # --------------------------------------------------
+    # 5. Select features (EXCLUDE price + target)
+    # --------------------------------------------------
+    exclude_cols = [
+        date_column,
+        'open', 'high', 'low', 'close',
+        'target'
+    ]
+
+    feature_cols = [c for c in train_df.columns if c not in exclude_cols]
+
+    # Binary / categorical features (DO NOT SCALE)
+    binary_cols = ['volPersist']
+
+    scale_cols = [c for c in feature_cols if c not in binary_cols]
+
+    # --------------------------------------------------
+    # 6. Scale features (TRAIN FIT ONLY)
+    # --------------------------------------------------
+    if scaler_method == 'standard':
+        scaler = StandardScaler()
+    elif scaler_method == 'minmax':
+        scaler = MinMaxScaler()
+    else:
+        raise ValueError("scaler_method must be 'standard' or 'minmax'")
+
+    train_df[scale_cols] = scaler.fit_transform(train_df[scale_cols])
+    val_df[scale_cols]   = scaler.transform(val_df[scale_cols])
+    test_df[scale_cols]  = scaler.transform(test_df[scale_cols])
+
+
+    #
+    # ext. print
+    #
+    #print(train_df.head())
+
+    # --------------------------------------------------
+    # 7. Windowing (AFTER scaling)
+    # --------------------------------------------------
+    X_train, y_train = sliding_window(
+        train_df[feature_cols + ['target']],
+        window_size,
+        target_column=target_column
+    )
+
+    X_val, y_val = sliding_window(
+        val_df[feature_cols + ['target']],
+        window_size,
+        target_column='target'
+    )
+
+    X_test, y_test = sliding_window(
+        test_df[feature_cols + ['target']],
+        window_size,
+        target_column='target'
+    )
+
+    # --------------------------------------------------
+    # 8. Torch datasets & loaders
+    # --------------------------------------------------
     train_dataset = TimeSeriesDataset(X_train, y_train)
-    val_dataset = TimeSeriesDataset(X_val, y_val)
-    test_dataset = TimeSeriesDataset(X_test, y_test)
+    val_dataset   = TimeSeriesDataset(X_val, y_val)
+    test_dataset  = TimeSeriesDataset(X_test, y_test)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=False
+    )
 
-    return train_loader, val_loader, test_loader, scaler
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False
+    )
+
+    return train_loader, val_loader, test_loader, scaler, feature_cols
+
 
 
 if __name__ == "__main__":
     dataPARAMS = {
     "file_path": "data/btc15m.csv",
     "date_column": "timestamp",
-    "target_column": "close",
+    "target_column": "logRet",
     "window_size": 64,
     "batch_size": 128,
     "val_size": 0.2,
     "test_size": 0.1,
     }
-    trainLoader, valLoader, testLoader, scaler = process(**dataPARAMS)
+    trainLoader, valLoader, testLoader, scaler, feature_cols = process(**dataPARAMS)
