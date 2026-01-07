@@ -278,3 +278,9 @@ if __name__ == "__main__":
     "test_size": 0.1,
     }
     trainLoader, valLoader, testLoader, scaler, feature_cols = process(**dataPARAMS)
+    
+    #output shapes for verification
+    for X_batch, y_batch in trainLoader:
+        print("Train batch X shape:", X_batch.shape)
+        print("Train batch y shape:", y_batch.shape)
+        break
