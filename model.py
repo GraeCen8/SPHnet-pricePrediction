@@ -267,7 +267,18 @@ class SPHNet(nn.Module):
             ff_dim=ff_dim,
             dropout=dropout
         )
-        
+
+        self.Transformer = nn.Transformer(
+            nhead=8,
+            num_encoder_layers=transformer_num_layers,
+            num_decoder_layers=transformer_num_layers,
+            activation=F.gelu,
+            dropout=dropout,
+            dim_feedforward=ff_dim,
+            d_model=embed_dim,
+            batch_first=True,
+              )
+
         # Aggregation layer: Combine patch outputs into single representation
         # Options: mean pooling, max pooling, or attention-based pooling
         self.aggregation = nn.Sequential(
@@ -306,23 +317,106 @@ class SPHNet(nn.Module):
         return predictions
 
 
+class SPHNetTest(nn.Module):
+    """
+    SPH-Net: Stock Price Prediction Hybrid Neural Network
+    
+    Architecture:
+    1. Trend Recognition Feature Extractor (ViT)
+    2. Deep Time-Series Predictor (Transformer)
+    3. Aggregation layer to combine patch outputs
+    4. Output layer for single price prediction
+    """
+    def __init__(self, num_features=6, patch_size=8, embed_dim=128,
+                 vit_num_layers=4, transformer_num_layers=4, num_heads=8,
+                 ff_dim=512, dropout=0.1, output_dim=1):
+        super(SPHNetTest, self).__init__()
+        
+        # Component 1: Trend Recognition Feature Extractor (ViT)
+        self.feature_extractor = TrendRecognitionFeatureExtractor(
+            num_features=num_features,
+            patch_size=patch_size,
+            embed_dim=embed_dim,
+            num_layers=vit_num_layers,
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout=dropout
+        )
+        
+        # Component 2: Deep Time-Series Predictor (Transformer)
+        self.DeepTimeSeriesPredictor = nn.Transformer(
+            nhead=8,
+            num_encoder_layers=transformer_num_layers,
+            num_decoder_layers=transformer_num_layers,
+            activation=F.gelu,
+            dropout=dropout,
+            dim_feedforward=ff_dim,
+            d_model=embed_dim,
+            batch_first=True
+              )
+        
+        # Target embedding layer: Project scalar targets to embedding dimension
+        self.tgt_embedding = nn.Linear(1, embed_dim)
+
+        # Aggregation layer: Combine patch outputs into single representation
+        # Options: mean pooling, max pooling, or attention-based pooling
+        self.aggregation = nn.Sequential(
+            nn.LayerNorm(embed_dim),
+            nn.Linear(embed_dim, embed_dim),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Output layer for single price prediction
+        self.output_layer = nn.Linear(embed_dim, output_dim)
+    
+    def forward(self, x):
+        """
+        x: (batch_size, seq_len, num_features)
+        Output: (batch_size, output_dim) - single prediction per sample
+        """
+        # Stage 1: Extract features using ViT
+        # Shape: (batch_size, num_patches, embed_dim)
+        features = self.feature_extractor(x)
+        
+        # Stage 2: Process features with Transformer
+        # Shape: (batch_size, num_patches, embed_dim)
+        # i need to use the actual 'answer - logRet' as the tgt input for the transformer
+        # Project target to embedding dimension: (batch_size, seq_len, 1) -> (batch_size, seq_len, embed_dim)
+        tgt = self.tgt_embedding(x[:, :, 0:1])  # x[:, :, 0:1] keeps shape (batch_size, seq_len, 1)
+        temporal_features = self.DeepTimeSeriesPredictor(features, tgt)
+        
+        # Stage 3: Aggregate across patches to get single representation per sample
+        # Mean pooling across patch dimension
+        aggregated = temporal_features.mean(dim=1)  # Shape: (batch_size, embed_dim)
+        
+        # Apply aggregation layer
+        aggregated = self.aggregation(aggregated)  # Shape: (batch_size, embed_dim)
+        
+        # Stage 4: Generate single prediction per sample
+        predictions = self.output_layer(aggregated)  # Shape: (batch_size, output_dim)
+        
+        return predictions
+
+
+
 # Example usage and model instantiation
 def test_sphnet():
     # Model configuration (as per paper)
     config = {
-        'num_features': 6,           # Open, High, Low, Close, Adj Close, Volume
-        'patch_size': 8,             # Optimal from ablation study
-        'embed_dim': 256,            # Patch embedding dimension
-        'vit_num_layers': 8,         # ViT layers
-        'transformer_num_layers': 8, # Transformer layers
-        'num_heads': 8,              # Number of attention heads (optimal)
-        'ff_dim': 512,               # Feed-forward dimension
-        'dropout': 0.2,              # Dropout rate
-        'output_dim': 1              # Single price prediction per sample
+        'num_features': 20,        
+        'patch_size': 8,             
+        'embed_dim': 256,            
+        'vit_num_layers': 6,         
+        'transformer_num_layers': 6, 
+        'num_heads': 8,              
+        'ff_dim': 512,               
+        'dropout': 0.3,              
+        'output_dim': 1  
     }
     
     # Initialize model
-    model = SPHNet(**config)
+    model = SPHNetTest(**config)
     
     # Move to GPU if available
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -377,7 +471,7 @@ def test_sphnet():
     print(f"Sequence length: {seq_len}")
     print(f"\nModel outputs: {output.shape[0]} predictions per batch")
 
-    print(output)
+    #print(output)
 
     print("=" * 80)
 
